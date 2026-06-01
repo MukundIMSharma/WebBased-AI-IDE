@@ -1,20 +1,8 @@
 import { MonacoLanguageClient } from 'monaco-languageclient';
-import { MonacoVscodeApiWrapper } from 'monaco-languageclient/vscodeApiWrapper';
 import { CloseAction, ErrorAction } from 'vscode-languageclient';
 import { WebSocketMessageReader, WebSocketMessageWriter } from 'vscode-ws-jsonrpc';
-import * as monaco from 'monaco-editor';
-
-let servicesInitialized = false;
 
 export async function createLanguageClient(language, serverUrl) {
-    if (!servicesInitialized) {
-        const wrapper = new MonacoVscodeApiWrapper({
-            $type: 'classic',
-            logLevel: 0 // LogLevel.Off
-        });
-        await wrapper.start();
-        servicesInitialized = true;
-    }
 
     const webSocket = new WebSocket(`${serverUrl}?language=${language}`);
 

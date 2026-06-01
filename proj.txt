@@ -1,0 +1,62 @@
+# WebCloud IDE & AI Assistant - Current and Planned Architecture
+
+## 1. Current Architecture (What's Done)
+
+We have established a robust, container-isolated IDE foundation with relational message persistence and newline-delimited streaming.
+
+### Core Components & Details
+
+* **Client / Frontend (React + Vite)**:
+  * **Activity Bar & Sidebars**: Allows toggling between the workspace File Explorer (tree.jsx) and the AI Assistant (AIChat.jsx) panel.
+  * **Monaco Editor (Editor.jsx)**: Implements a standard instance of Monaco Editor (vs-dark theme) with syntax highlighting, automatic saving to the server (every 3 seconds of idle time or via Ctrl + S), and context menu hooks ("Explain with Claude", etc.). It captures selections and cursor line numbers to feed editorContext back to the AI prompt.
+  * **Terminal (terminal.jsx)**: Employs xterm.js to handle terminal display, communicating over a Socket.IO connection to pipe terminal keystrokes and outputs.
+  * **AI Chat (AIChat.jsx)**: Manages chat sessions. It communicates with the backend via Newline-Delimited JSON (NDJSON) Streaming, parsing incoming text blocks ({"type": "text", "delta": "..."}) and rendering XML-tagged replacement code blocks (<replace_block>) with an "Apply to Editor" action button.
+
+* **Backend / Server (Node.js + Express + Socket.IO)**:
+  * **Container Sandboxing (containerManager.js & index.js)**: All operations run inside an isolated Docker container (ide_user_default).
+    * Filesystem edits (/files, /files/content) use docker exec commands to read and write inside the container workspace (/home/user/workspace).
+    * Terminal execution uses node-pty to spawn an interactive shell process linked directly to the running container.
+  * **Language Server Protocol (lsp.js)**: Runs a server-side LSP launcher and routes websocket messages for rich completions.
+  * **Relational Database Persistence (db.js)**: Features an active SQLite connection (chats.db using the sqlite3 package) with two primary tables: chats and messages. This maintains chat histories, timestamps, and serialized tool outputs with cascading delete constraints.
+  * **AI Generation (ai.js)**: Communicates with OpenAI using gpt-4o-mini. It builds system instructions dynamically using available editor state and streams responses using NDJSON chunks.
+
+---
+
+## 2. Planned Architecture (What We Are Planning to Do Now)
+
+Our planned expansion shifts the AI assistant from a stateless chat companion into an agentic orchestration client utilizing the Model Context Protocol (MCP) and integrates a rich diff-review system.
+
+### Phase 2: Model Context Protocol (MCP) Integration
+
+1. **Configurable MCP Client Manager (server/mcpClient.js)**:
+   * Read external server config from a schema at server/config/mcp-servers.json (such as web search engines, knowledge bases, or database connectors).
+   * Initiate connection pipelines supporting both Stdio (local child processes spawned on-the-fly) and SSE (Server-Sent Events) network transports using @modelcontextprotocol/sdk.
+
+2. **Local IDE MCP Server (In-Process)**:
+   * Register a local, in-memory MCP server that represents the IDE state.
+   * Expose Resources:
+     * `ide://active-file` (returns the full content of the file open in the editor).
+     * `ide://selection` (returns currently selected code text).
+   * Expose Tools:
+     * `read_workspace_file` & `write_workspace_file` (interact securely with files inside the /home/user/workspace/ path in Docker).
+     * `execute_workspace_command` (executes shell commands strictly within the isolated container via containerExec).
+
+3. **LLM Agentic Tool Loop**:
+   * Refactor server/ai.js to discover all capabilities across local and external MCP connections and declare them as active tools in the LLM execution array.
+   * Implement a recursive loop in the backend stream controller:
+     * If the LLM triggers a tool, write tool_start to the NDJSON stream ({"type": "tool_start", "name": "...", "args": {...}}).
+     * Dispatch tool invocation to the respective MCP server.
+     * Write tool_end to the NDJSON stream once executed ({"type": "tool_end", "name": "...", "result": "..."}).
+     * Feed results back to the LLM context to determine if it should invoke more tools or deliver its final conversational response.
+
+### Phase 3: Premium UI & Diff Review Experience
+
+1. **Live Tool Execution Visualizer**:
+   * Refactor AIChat.jsx to render dynamic, glassmorphic status bubbles in the chat thread showing real-time tool state (e.g. "Searching Google for API docs..." or "Running npm test in sandbox...").
+
+2. **Monaco DiffEditor Review Panel**:
+   * Transition Monaco Editor into a visual split-pane Diff view (monaco.editor.createDiffEditor) when a user clicks "Apply to Editor" on a recommended change block.
+   * Show the original repository code on the left and the newly edited code recommendations on the right.
+   * Position a premium floating action bar at the footer of the editor:
+     * **Accept Change** (Green Checkmark): commits the suggestion to the container file, auto-saves to backend, and returns to normal editor mode.
+     * **Reject Change** (Red Cross): discards the changes and safely reverts to the standard editor mode.

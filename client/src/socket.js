@@ -1,4 +1,7 @@
-import { io } from 'socket.io-client'
+import { io } from 'socket.io-client';
 
-const Socket = io('http://localhost:9000')
+const Socket = io('http://localhost:9000', {
+    autoConnect: false
+});
+
 export default Socket;

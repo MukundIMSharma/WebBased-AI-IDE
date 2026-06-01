@@ -1,100 +1,74 @@
 import express from "express";
-import fs from "fs/promises";
-import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import OpenAI from "openai";
+import {
+    getChats as dbGetChats,
+    getChat as dbGetChat,
+    createChat as dbCreateChat,
+    deleteChat as dbDeleteChat,
+    addMessage as dbAddMessage,
+    updateChatTitle as dbUpdateChatTitle
+} from './db.js';
+import { authenticateToken } from './auth.js';
 
 const router = express.Router();
-const CHATS_FILE = path.resolve('./data/chats.json');
-
-// Ensure chats file exists
-async function ensureChatsFile() {
-    try {
-        await fs.access(CHATS_FILE);
-    } catch {
-        await fs.mkdir(path.resolve('./data'), { recursive: true });
-        await fs.writeFile(CHATS_FILE, "[]", 'utf-8');
-    }
-}
-
-async function getChats() {
-    await ensureChatsFile();
-    const data = await fs.readFile(CHATS_FILE, 'utf-8');
-    return JSON.parse(data);
-}
-
-async function saveChats(chats) {
-    await fs.writeFile(CHATS_FILE, JSON.stringify(chats, null, 2), 'utf-8');
-}
 
 // Get all chats
-router.get("/chats", async (req, res) => {
+router.get("/chats", authenticateToken, async (req, res) => {
     try {
-        const chats = await getChats();
-        // Return chats without full messages for the list view
-        const chatList = chats.map(c => ({ id: c.id, title: c.title, updatedAt: c.updatedAt }));
-        res.json(chatList.sort((a, b) => b.updatedAt - a.updatedAt));
+        const chats = await dbGetChats(req.user.id);
+        res.json(chats);
     } catch (err) {
+        console.error("Fetch chats error:", err);
         res.status(500).json({ error: "Failed to fetch chats" });
     }
 });
 
 // Get a specific chat
-router.get("/chats/:id", async (req, res) => {
+router.get("/chats/:id", authenticateToken, async (req, res) => {
     try {
-        const chats = await getChats();
-        const chat = chats.find(c => c.id === req.params.id);
+        const chat = await dbGetChat(req.user.id, req.params.id);
         if (!chat) return res.status(404).json({ error: "Chat not found" });
         res.json(chat);
     } catch (err) {
+        console.error("Fetch chat error:", err);
         res.status(500).json({ error: "Failed to fetch chat" });
     }
 });
 
 // Create a new chat
-router.post("/chats", async (req, res) => {
+router.post("/chats", authenticateToken, async (req, res) => {
     try {
-        const chats = await getChats();
-        const newChat = {
-            id: uuidv4(),
-            title: "New Chat",
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            messages: []
-        };
-        chats.push(newChat);
-        await saveChats(chats);
-        res.json(newChat);
+        const id = uuidv4();
+        const chat = await dbCreateChat(req.user.id, id, "New Chat");
+        res.json(chat);
     } catch (err) {
+        console.error("Create chat error:", err);
         res.status(500).json({ error: "Failed to create chat" });
     }
 });
 
 // Delete a chat
-router.delete("/chats/:id", async (req, res) => {
+router.delete("/chats/:id", authenticateToken, async (req, res) => {
     try {
-        let chats = await getChats();
-        chats = chats.filter(c => c.id !== req.params.id);
-        await saveChats(chats);
+        await dbDeleteChat(req.user.id, req.params.id);
         res.json({ success: true });
     } catch (err) {
+        console.error("Delete chat error:", err);
         res.status(500).json({ error: "Failed to delete chat" });
     }
 });
 
-// Send message to a chat
-router.post("/chats/:id/message", express.json(), async (req, res) => {
+// Send message to a chat (NDJSON Streaming)
+router.post("/chats/:id/message", authenticateToken, express.json(), async (req, res) => {
     const { id } = req.params;
     const { prompt, context } = req.body;
 
     if (!prompt) return res.status(400).json({ error: "Prompt is required" });
 
     try {
-        const chats = await getChats();
-        const chatIndex = chats.findIndex(c => c.id === id);
-        if (chatIndex === -1) return res.status(404).json({ error: "Chat not found" });
-
-        const chat = chats[chatIndex];
+        const chat = await dbGetChat(req.user.id, id);
+        if (!chat) return res.status(404).json({ error: "Chat not found" });
 
         // Setup OpenAI client
         const openai = new OpenAI({
@@ -105,48 +79,84 @@ router.post("/chats/:id/message", express.json(), async (req, res) => {
             return res.status(500).json({ error: "Missing OPENAI_API_KEY in server/.env" });
         }
 
-        // Add user message to history
-        chat.messages.push({ role: "user", content: prompt });
+        // Generate message IDs and save User message to database
+        const userMsgId = uuidv4();
+        await dbAddMessage(userMsgId, id, "user", prompt);
 
-        // Update title if it's the first message
+        // Update title if it was the default "New Chat"
         if (chat.title === "New Chat") {
-            chat.title = prompt.substring(0, 30) + (prompt.length > 30 ? "..." : "");
+            const newTitle = prompt.substring(0, 30) + (prompt.length > 30 ? "..." : "");
+            await dbUpdateChatTitle(req.user.id, id, newTitle);
         }
 
-        // Build system prompt with context if available
-        let systemPrompt = "You are a helpful AI coding assistant integrated directly into the WebCloud IDE.";
-        if (context && context.selectedFile) {
-            systemPrompt += `\n\nThe user is currently focusing on the file: \`${context.selectedFile}\`\n\nContent of the file:\n\`\`\`\n${context.selectedFileContent || ''}\n\`\`\``;
+        // Build system prompt with editor context
+        let systemPrompt = "You are an expert AI coding assistant embedded inside a web-based IDE, similar to Cursor.\n";
+        if (context) {
+            if (context.selectedFile) {
+                systemPrompt += `The user is currently working on: ${context.selectedFile}\n\n`;
+            }
+            if (context.selectedFileContent) {
+                systemPrompt += `Full file content:\n\`\`\`\n${context.selectedFileContent}\n\`\`\`\n\n`;
+            }
+            if (context.editorContext) {
+                if (context.editorContext.selectedText) {
+                    systemPrompt += `Selected text (lines around cursor):\n\`\`\`\n${context.editorContext.selectedText}\n\`\`\`\n\n`;
+                }
+                systemPrompt += `Cursor is at line ${context.editorContext.cursorLine}.\n`;
+            }
+            systemPrompt += "When suggesting code changes, reference specific start and end line numbers.\n";
+            systemPrompt += "When you produce a code block intended to replace existing code, wrap it EXPLICITLY in XML-like tags, exactly like this format:\n";
+            systemPrompt += "<replace_block file=\"filename\" start_line=\"N\" end_line=\"N\">\nCODE GOES HERE\n</replace_block>\n";
+            systemPrompt += "The IDE will parse these tags to automate updating the code visually, so ensure the replacement precisely covers what you wish to replace!";
         }
 
-        // Convert messages for OpenAI API
+        // Get past messages for completion
         const gptMessages = chat.messages.map(m => ({
             role: m.role,
             content: m.content
         }));
 
-        // Call OpenAI
+        // Setup NDJSON Stream headers
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        // Call OpenAI with stream
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
-            max_tokens: 150, // Limiting tokens as requested
+            max_tokens: 1500,
+            stream: true,
             messages: [
                 { role: "system", content: systemPrompt },
-                ...gptMessages
+                ...gptMessages,
+                { role: "user", content: prompt }
             ]
         });
 
-        const replyContent = completion.choices[0].message.content;
+        let fullReply = "";
 
-        // Add assistant reply to history
-        chat.messages.push({ role: "assistant", content: replyContent });
-        chat.updatedAt = Date.now();
+        for await (const chunk of completion) {
+            const content = chunk.choices[0]?.delta?.content || "";
+            if (content) {
+                fullReply += content;
+                // Emit chunk as structured JSON followed by a newline
+                res.write(JSON.stringify({ type: "text", delta: content }) + "\n");
+            }
+        }
+        res.end();
 
-        await saveChats(chats);
-        res.json(chat);
+        // Save assistant reply to SQLite
+        const assistantMsgId = uuidv4();
+        await dbAddMessage(assistantMsgId, id, "assistant", fullReply);
 
     } catch (err) {
         console.error("AI Chat Error:", err);
-        res.status(500).json({ error: "Failed to process chat message" });
+        // If headers are already sent, we write the error event inline to avoid breaking the stream
+        if (res.headersSent) {
+            res.write(JSON.stringify({ type: "error", message: "Failed to complete AI response." }) + "\n");
+            res.end();
+        } else {
+            res.status(500).json({ error: "Failed to process chat message" });
+        }
     }
 });
 

@@ -1,13 +1,29 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as monaco from 'monaco-editor';
 import { createLanguageClient } from '../lsp-client';
 
-const Editor = ({ selectedFile, content, onContentChange, onOpenAIChat }) => {
+const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAIChat, onContextChange }, ref) => {
     const editorRef = useRef(null);
     const monacoInstance = useRef(null);
     const languageClientRef = useRef(null);
     const timeoutRef = useRef(null);
     const lastSavedContent = useRef(content);
+
+    useImperativeHandle(ref, () => ({
+        applyReplaceBlock: (startLine, endLine, newContent) => {
+            if (monacoInstance.current) {
+                const model = monacoInstance.current.getModel();
+                if (model) {
+                    const range = new monaco.Range(startLine, 1, endLine, model.getLineMaxColumn(endLine));
+                    monacoInstance.current.executeEdits("ai-replace", [{
+                        range: range,
+                        text: newContent,
+                        forceMoveMarkers: true
+                    }]);
+                }
+            }
+        }
+    }));
 
     const getLanguage = (filename) => {
         if (!filename) return 'python';
@@ -45,14 +61,64 @@ const Editor = ({ selectedFile, content, onContentChange, onOpenAIChat }) => {
             onContentChange(value);
         });
 
+        monacoInstance.current.addAction({
+            id: 'claude-explain',
+            label: 'Explain with Claude',
+            contextMenuGroupId: 'navigation',
+            contextMenuOrder: 1.5,
+            run: (ed) => {
+                const selection = ed.getModel().getValueInRange(ed.getSelection());
+                if(onOpenAIChat) onOpenAIChat("Explain this:\n" + selection);
+            }
+        });
+
+        monacoInstance.current.addAction({
+            id: 'claude-fix',
+            label: 'Fix with Claude',
+            contextMenuGroupId: 'navigation',
+            contextMenuOrder: 1.6,
+            run: (ed) => {
+                const selection = ed.getModel().getValueInRange(ed.getSelection());
+                if(onOpenAIChat) onOpenAIChat("Fix this:\n" + selection);
+            }
+        });
+
+        monacoInstance.current.addAction({
+            id: 'claude-refactor',
+            label: 'Refactor with Claude',
+            contextMenuGroupId: 'navigation',
+            contextMenuOrder: 1.7,
+            run: (ed) => {
+                const selection = ed.getModel().getValueInRange(ed.getSelection());
+                if(onOpenAIChat) onOpenAIChat("Refactor this:\n" + selection);
+            }
+        });
+
+        monacoInstance.current.onDidChangeCursorPosition((e) => {
+            if (onContextChange) {
+                onContextChange(prev => ({ ...prev, cursorLine: e.position.lineNumber }));
+            }
+        });
+
+        monacoInstance.current.onDidChangeCursorSelection((e) => {
+            if (onContextChange && monacoInstance.current) {
+                const selection = monacoInstance.current.getModel().getValueInRange(e.selection);
+                onContextChange(prev => ({ ...prev, selectedText: selection || "" }));
+            }
+        });
+
         const handleSave = async (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                 e.preventDefault();
                 const currentContent = monacoInstance.current.getValue();
                 try {
+                    const token = localStorage.getItem('token');
                     const response = await fetch('http://localhost:9000/files/content', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
                         body: JSON.stringify({ path: selectedFile, content: currentContent })
                     });
                     const result = await response.json();
@@ -97,12 +163,25 @@ const Editor = ({ selectedFile, content, onContentChange, onOpenAIChat }) => {
 
             monacoInstance.current.setModel(model);
 
-            // Start LSP for Python if not already started
-            if (language === 'python' && !languageClientRef.current) {
-                createLanguageClient('python', 'ws://localhost:9000/lsp')
-                    .then(client => {
-                        languageClientRef.current = client;
-                    });
+            // Handle dynamic LSP language switching
+            const supportedLSP = ['python', 'javascript', 'typescript'];
+            if (supportedLSP.includes(language)) {
+                if (languageClientRef.current && languageClientRef.current.language !== language) {
+                    languageClientRef.current.stop();
+                    languageClientRef.current = null;
+                }
+                
+                if (!languageClientRef.current) {
+                    createLanguageClient(language, 'ws://localhost:9000/lsp')
+                        .then(client => {
+                            client.language = language;
+                            languageClientRef.current = client;
+                        }).catch(console.error);
+                }
+            } else if (languageClientRef.current) {
+                // Stop LSP if opening an unsupported file
+                languageClientRef.current.stop();
+                languageClientRef.current = null;
             }
         }
     }, [selectedFile, content]);
@@ -122,9 +201,13 @@ const Editor = ({ selectedFile, content, onContentChange, onOpenAIChat }) => {
             if (content !== lastSavedContent.current && monacoInstance.current) {
                 const currentContent = monacoInstance.current.getValue();
                 try {
+                    const token = localStorage.getItem('token');
                     const response = await fetch('http://localhost:9000/files/content', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
                         body: JSON.stringify({ path: selectedFile, content: currentContent })
                     });
                     if (response.ok) {
@@ -159,6 +242,6 @@ const Editor = ({ selectedFile, content, onContentChange, onOpenAIChat }) => {
             </div>
         </div>
     );
-};
+});
 
 export default Editor;

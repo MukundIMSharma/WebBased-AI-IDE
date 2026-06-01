@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './AIChat.css';
 
-const AIChat = ({ selectedFile, selectedFileContent }) => {
+const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, setAiPrefill, onApplyToEditor }) => {
     const [chats, setChats] = useState([]);
     const [activeChatId, setActiveChatId] = useState(null);
     const [messages, setMessages] = useState([]);
@@ -12,7 +12,10 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
 
     const fetchChats = async () => {
         try {
-            const res = await fetch('http://localhost:9000/ai/chats');
+            const token = localStorage.getItem('token');
+            const res = await fetch('http://localhost:9000/ai/chats', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             const data = await res.json();
             setChats(data);
         } catch (err) {
@@ -36,7 +39,10 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
 
     const loadChat = async (id) => {
         try {
-            const res = await fetch(`http://localhost:9000/ai/chats/${id}`);
+            const token = localStorage.getItem('token');
+            const res = await fetch(`http://localhost:9000/ai/chats/${id}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             const data = await res.json();
             setActiveChatId(data.id);
             setMessages(data.messages || []);
@@ -48,7 +54,11 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
 
     const createNewChat = async () => {
         try {
-            const res = await fetch('http://localhost:9000/ai/chats', { method: 'POST' });
+            const token = localStorage.getItem('token');
+            const res = await fetch('http://localhost:9000/ai/chats', { 
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             const data = await res.json();
             setActiveChatId(data.id);
             setMessages([]);
@@ -62,7 +72,11 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
     const deleteChat = async (e, id) => {
         e.stopPropagation();
         try {
-            await fetch(`http://localhost:9000/ai/chats/${id}`, { method: 'DELETE' });
+            const token = localStorage.getItem('token');
+            await fetch(`http://localhost:9000/ai/chats/${id}`, { 
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (activeChatId === id) {
                 setActiveChatId(null);
                 setView('list');
@@ -73,33 +87,93 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
         }
     };
 
-    const sendMessage = async () => {
-        if (!input.trim() || !activeChatId) return;
+    useEffect(() => {
+        if (aiPrefill && activeChatId) {
+            submitMessage(aiPrefill);
+            setAiPrefill("");
+        }
+    }, [aiPrefill, activeChatId]);
 
-        const userMessage = input.trim();
+    const submitMessage = async (msgText) => {
+        if (!msgText.trim() || !activeChatId) return;
+
+        const userMessage = msgText.trim();
         setInput("");
         setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
         setIsLoading(true);
 
         try {
+            const token = localStorage.getItem('token');
             const res = await fetch(`http://localhost:9000/ai/chats/${activeChatId}/message`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
                 body: JSON.stringify({
                     prompt: userMessage,
                     context: {
                         selectedFile,
-                        selectedFileContent
+                        selectedFileContent,
+                        editorContext
                     }
                 })
             });
-            const data = await res.json();
-            
-            // Assume the response returns the updated chat object
-            if (data && data.messages) {
-                setMessages(data.messages);
+
+            if (!res.body) throw new Error("No body Stream");
+
+            setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
+            setIsLoading(false);
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulatedText = "";
+            let streamBuffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    if (streamBuffer.trim()) {
+                        try {
+                            const parsed = JSON.parse(streamBuffer);
+                            if (parsed.type === 'text') {
+                                accumulatedText += parsed.delta;
+                            }
+                        } catch (e) {}
+                    }
+                    break;
+                }
+                
+                streamBuffer += decoder.decode(value, { stream: true });
+                const lines = streamBuffer.split('\n');
+                streamBuffer = lines.pop(); // save the partial line
+                
+                let hasUpdates = false;
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const parsed = JSON.parse(line);
+                        if (parsed.type === 'text') {
+                            accumulatedText += parsed.delta;
+                            hasUpdates = true;
+                        } else if (parsed.type === 'error') {
+                            accumulatedText += `\n[Error: ${parsed.message}]`;
+                            hasUpdates = true;
+                        }
+                    } catch (err) {
+                        console.warn("Failed to parse JSON stream line:", line, err);
+                    }
+                }
+
+                if (hasUpdates) {
+                    setMessages(prev => {
+                        const next = [...prev];
+                        next[next.length - 1].content = accumulatedText;
+                        return next;
+                    });
+                }
             }
-            fetchChats(); // Refresh list to update title
+            fetchChats();
         } catch (err) {
             console.error("Failed to send message", err);
             setMessages(prev => [...prev, { role: 'assistant', content: "Error: Failed to fetch response." }]);
@@ -111,8 +185,41 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            submitMessage(input);
         }
+    };
+
+    const renderMessageContent = (text) => {
+        const regex = /<replace_block\s+file="([^"]+)"\s+start_line="(\d+)"\s+end_line="(\d+)">([\s\S]*?)<\/replace_block>/g;
+        const parts = [];
+        let lastIndex = 0;
+        
+        text.replace(regex, (match, file, startLine, endLine, codeContent, offset) => {
+            if (offset > lastIndex) {
+                parts.push(<span key={lastIndex}>{text.substring(lastIndex, offset)}</span>);
+            }
+            parts.push(
+                <div key={offset} className="replace-block-container" style={{background: '#1e1e1e', padding: '10px', marginTop: '10px', borderRadius: '4px', border: '1px solid #444'}}>
+                    <div style={{display: 'flex', justifyContent: 'space-between', marginBottom: '8px', borderBottom: '1px solid #333', paddingBottom: '6px'}}>
+                        <span style={{fontSize: '12px', color: '#9cdcfe', fontFamily: 'monospace'}}>{file} L{startLine}-{endLine}</span>
+                        <button 
+                            className="apply-btn"
+                            style={{fontSize: '11px', background: '#0e639c', color: '#fff', border: 'none', borderRadius: '3px', cursor: 'pointer', padding: '2px 8px'}}
+                            onClick={() => onApplyToEditor(parseInt(startLine), parseInt(endLine), codeContent.replace(/^\n+/, ''))}>
+                            Apply to Editor
+                        </button>
+                    </div>
+                    <pre style={{margin: 0, overflowX: 'auto', fontSize: '13px', fontFamily: 'monospace'}}>{codeContent.replace(/^\n+/, '')}</pre>
+                </div>
+            );
+            lastIndex = offset + match.length;
+        });
+        
+        if (lastIndex < text.length) {
+            parts.push(<span key={lastIndex}>{text.substring(lastIndex)}</span>);
+        }
+
+        return parts.length > 0 ? parts : text;
     };
 
     if (view === 'list') {
@@ -152,7 +259,7 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
                     messages.map((msg, i) => (
                         <div key={i} className={`message ${msg.role}`}>
                             <div className="message-role">{msg.role === 'user' ? 'You' : 'Claude'}</div>
-                            <div className="message-content">{msg.content}</div>
+                            <div className="message-content">{renderMessageContent(msg.content)}</div>
                         </div>
                     ))
                 )}
@@ -173,7 +280,7 @@ const AIChat = ({ selectedFile, selectedFileContent }) => {
                     placeholder="Ask Claude... (Shift+Enter for new line)"
                     rows="3"
                 />
-                <button disabled={isLoading || !input.trim()} onClick={sendMessage}>Send</button>
+                <button disabled={isLoading || !input.trim()} onClick={() => submitMessage(input)}>Send</button>
             </div>
         </div>
     );

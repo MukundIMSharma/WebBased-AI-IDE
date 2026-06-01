@@ -17,7 +17,11 @@ export function setupLsp(httpServer) {
                 if (language === 'python') {
                     const socketAdapter = rpc.toSocket(webSocket);
                     const connection = server.createWebSocketConnection(socketAdapter);
-                    launchLanguageServer(connection, 'python', ['-m', 'pylsp']);
+                    launchLanguageServer(connection, 'docker', ['exec', '-i', 'ide_user_default', 'pyright-langserver', '--stdio']);
+                } else if (language === 'typescript' || language === 'javascript') {
+                    const socketAdapter = rpc.toSocket(webSocket);
+                    const connection = server.createWebSocketConnection(socketAdapter);
+                    launchLanguageServer(connection, 'docker', ['exec', '-i', 'ide_user_default', 'typescript-language-server', '--stdio']);
                 }
             });
         }
@@ -25,10 +29,9 @@ export function setupLsp(httpServer) {
 }
 
 function launchLanguageServer(connection, command, args) {
-    const serverConnection = server.createServerProcess('python', command, args, {
-        shell: true,
-        env: process.env,
-        cwd: path.resolve('./__user')
+    const serverConnection = server.createServerProcess('lsp', command, args, {
+        shell: false,
+        env: process.env
     });
 
     if (serverConnection) {
