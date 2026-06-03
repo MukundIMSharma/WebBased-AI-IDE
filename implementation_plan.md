@@ -231,7 +231,93 @@ To implement this plan, we will conduct changes across both components.
 
 ---
 
-## 6. Open Questions & Future Enhancements
+## 6. DeepSeek-Coder-V2 Integration via Hugging Face
+
+Replace the current OpenAI `gpt-4o-mini` model with `deepseek-ai/DeepSeek-Coder-V2-Instruct` using the **Hugging Face Inference API**, which exposes an OpenAI-compatible endpoint. Since the current `ai.js` already uses the `openai` npm SDK, this is a minimal change — only the `baseURL`, `apiKey`, and `model` fields need updating.
+
+### How it works
+
+Hugging Face's Inference API for serverless models exposes an OpenAI-compatible REST interface at:
+```
+https://router.huggingface.co/v1
+```
+This means the existing `openai` SDK call works with zero structural changes — just swap the credentials and base URL.
+
+---
+
+### Step-by-Step: What to Change
+
+#### Step 1 — Get a Hugging Face API Key
+1. Go to [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+2. Click **"New token"** → choose **"Read"** role → copy the token (starts with `hf_...`)
+3. Make sure the model `deepseek-ai/DeepSeek-Coder-V2-Instruct` is available under your plan (it is free on the serverless tier with rate limits)
+
+#### Step 2 — Add key to `.env`
+
+#### [MODIFY] [.env](file:///d:/Projects/WebCloud%20IDE/server/.env)
+Add the following line:
+```env
+HUGGINGFACE_API_KEY=hf_your_token_here
+```
+
+#### Step 3 — Update the AI client in `ai.js`
+
+#### [MODIFY] [ai.js](file:///d:/Projects/WebCloud%20IDE/server/ai.js)
+
+Change the OpenAI client initialization (currently around line 74) from:
+```js
+// BEFORE
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || "",
+});
+```
+To:
+```js
+// AFTER
+const openai = new OpenAI({
+    apiKey: process.env.HUGGINGFACE_API_KEY || "",
+    baseURL: "https://router.huggingface.co/v1",
+});
+```
+
+Change the model name in the `chat.completions.create` call (around line 124) from:
+```js
+// BEFORE
+model: "gpt-4o-mini",
+```
+To:
+```js
+// AFTER
+model: "deepseek-ai/DeepSeek-Coder-V2-Instruct",
+```
+
+Also update the API key guard check:
+```js
+// BEFORE
+if (!process.env.OPENAI_API_KEY) {
+    return res.status(500).json({ error: "Missing OPENAI_API_KEY in server/.env" });
+}
+// AFTER
+if (!process.env.HUGGINGFACE_API_KEY) {
+    return res.status(500).json({ error: "Missing HUGGINGFACE_API_KEY in server/.env" });
+}
+```
+
+---
+
+### Notes & Limitations
+
+| Aspect | Detail |
+|--------|--------|
+| **Streaming** | HF Inference API supports SSE streaming — the existing `stream: true` will work |
+| **Rate limits** | Free tier has limited requests/minute; upgrade to PRO ($9/mo) for higher limits |
+| **Context window** | DeepSeek-Coder-V2-Instruct supports up to **128K tokens** — excellent for large files |
+| **`max_tokens`** | Keep at `1500` or increase — the model supports much more |
+| **Fallback** | Keep `OPENAI_API_KEY` in `.env` as a backup in case HF is unavailable |
+
+---
+
+## 7. Open Questions & Future Enhancements
 
 > [!IMPORTANT]
 > 1. **Initial File Seeding**: When a user registers for the first time, what starter repository files should be loaded into their container workspace (`/home/user/workspace`)? Currently we copy from the `server/__user` directory. Should we keep this or allow users to link a Github repository during signup?

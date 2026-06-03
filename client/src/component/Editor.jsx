@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as monaco from 'monaco-editor';
 import { createLanguageClient } from '../lsp-client';
+import TokenVerificationPanel from './TokenVerificationPanel';
 
-const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAIChat, onContextChange }, ref) => {
+const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAIChat, onContextChange, hfTokenState, onSaveSuccess, onCloseSettings }, ref) => {
     const editorRef = useRef(null);
     const monacoInstance = useRef(null);
     const languageClientRef = useRef(null);
@@ -148,6 +149,7 @@ const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAICha
 
     useEffect(() => {
         if (monacoInstance.current && selectedFile) {
+            if (selectedFile === 'settings') return;
             const language = getLanguage(selectedFile);
             const uri = monaco.Uri.file(selectedFile);
 
@@ -191,7 +193,7 @@ const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAICha
     }, [selectedFile]);
 
     useEffect(() => {
-        if (!selectedFile) return;
+        if (!selectedFile || selectedFile === 'settings') return;
 
         if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
@@ -230,15 +232,63 @@ const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAICha
         };
     }, [content, selectedFile]);
 
+    // Re-layout Monaco when switching tabs back from settings
+    useEffect(() => {
+        if (monacoInstance.current && selectedFile !== 'settings') {
+            setTimeout(() => {
+                monacoInstance.current.layout();
+            }, 0);
+        }
+    }, [selectedFile]);
+
     return (
         <div className="editor-panel">
             <div className="editor-tabs">
-                <div className="tab active">
-                    {selectedFile ? selectedFile.split('/').pop() : 'Welcome'}
+                <div className="tab active" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {selectedFile === 'settings' ? (
+                        <>
+                            <span>Settings</span>
+                            <span 
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (onCloseSettings) onCloseSettings();
+                                }}
+                                style={{ 
+                                    cursor: 'pointer', 
+                                    opacity: 0.6, 
+                                    fontSize: '11px',
+                                    padding: '2px 4px',
+                                    borderRadius: '3px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
+                                }}
+                                className="tab-close-icon"
+                                title="Close tab"
+                            >
+                                ✕
+                            </span>
+                        </>
+                    ) : (
+                        <span>{selectedFile ? selectedFile.split('/').pop() : 'Welcome'}</span>
+                    )}
                 </div>
             </div>
-            <div className="editor-content" style={{ height: 'calc(100% - 35px)' }}>
-                <div ref={editorRef} style={{ height: '100%', width: '100%' }} />
+            <div className="editor-content" style={{ height: 'calc(100% - 35px)', position: 'relative' }}>
+                {selectedFile === 'settings' ? (
+                    <TokenVerificationPanel 
+                        hfTokenState={hfTokenState} 
+                        onSaveSuccess={onSaveSuccess} 
+                    />
+                ) : null}
+                <div 
+                    ref={editorRef} 
+                    style={{ 
+                        height: '100%', 
+                        width: '100%', 
+                        display: selectedFile === 'settings' ? 'none' : 'block' 
+                    }} 
+                />
             </div>
         </div>
     );

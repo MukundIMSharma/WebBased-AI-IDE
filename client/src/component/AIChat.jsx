@@ -1,13 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './AIChat.css';
 
-const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, setAiPrefill, onApplyToEditor }) => {
+const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, setAiPrefill, hfTokenState, onOpenTokenModal, onApplyToEditor }) => {
     const [chats, setChats] = useState([]);
     const [activeChatId, setActiveChatId] = useState(null);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [view, setView] = useState('list'); // 'list' or 'chat'
+    const [hasPermissionError, setHasPermissionError] = useState(false);
+
+    useEffect(() => {
+        setHasPermissionError(false);
+    }, [hfTokenState]);
     const messagesEndRef = useRef(null);
 
     const fetchChats = async () => {
@@ -120,6 +125,17 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
                 })
             });
 
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                const errMsg = errBody.error || "Failed to process chat message.";
+                if (errBody.isTokenError) {
+                    setHasPermissionError(true);
+                }
+                setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${errMsg}` }]);
+                setIsLoading(false);
+                return;
+            }
+
             if (!res.body) throw new Error("No body Stream");
 
             setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
@@ -158,6 +174,9 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
                             hasUpdates = true;
                         } else if (parsed.type === 'error') {
                             accumulatedText += `\n[Error: ${parsed.message}]`;
+                            if (parsed.isTokenError) {
+                                setHasPermissionError(true);
+                            }
                             hasUpdates = true;
                         }
                     } catch (err) {
@@ -229,6 +248,15 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
                     <h2>AI Chats</h2>
                     <button className="new-chat-btn" onClick={createNewChat}>+ New Chat</button>
                 </div>
+                {(!hfTokenState || !hfTokenState.hasToken) && (
+                    <div className="token-warning-banner">
+                        <span className="warning-icon">⚠️</span>
+                        <div className="warning-content">
+                            <strong>Token Required:</strong> AI Chat is disabled.
+                        </div>
+                        <button className="configure-token-btn" onClick={onOpenTokenModal}>Configure</button>
+                    </div>
+                )}
                 <div className="chat-list">
                     {chats.map(chat => (
                         <div key={chat.id} className="chat-list-item" onClick={() => loadChat(chat.id)}>
@@ -248,6 +276,24 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
                 <button className="back-btn" onClick={() => setView('list')}>← Back</button>
                 <h2>Current Chat</h2>
             </div>
+            {(!hfTokenState || !hfTokenState.hasToken) && (
+                <div className="token-warning-banner">
+                    <span className="warning-icon">⚠️</span>
+                    <div className="warning-content">
+                        <strong>Token Required:</strong> AI Chat is disabled.
+                    </div>
+                    <button className="configure-token-btn" onClick={onOpenTokenModal}>Configure</button>
+                </div>
+            )}
+            {hfTokenState && hfTokenState.hasToken && hasPermissionError && (
+                <div className="token-warning-banner error">
+                    <span className="warning-icon">⚠️</span>
+                    <div className="warning-content">
+                        <strong>Inference Error:</strong> Token permission issue or model unsupported.
+                    </div>
+                    <button className="configure-token-btn" onClick={onOpenTokenModal}>Update</button>
+                </div>
+            )}
             
             <div className="messages-container">
                 {messages.length === 0 ? (
@@ -258,14 +304,14 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
                 ) : (
                     messages.map((msg, i) => (
                         <div key={i} className={`message ${msg.role}`}>
-                            <div className="message-role">{msg.role === 'user' ? 'You' : 'Claude'}</div>
+                            <div className="message-role">{msg.role === 'user' ? 'You' : 'AI Assistant'}</div>
                             <div className="message-content">{renderMessageContent(msg.content)}</div>
                         </div>
                     ))
                 )}
                 {isLoading && (
                     <div className="message assistant">
-                        <div className="message-role">Claude</div>
+                        <div className="message-role">AI Assistant</div>
                         <div className="message-content loading">Generating...</div>
                     </div>
                 )}
@@ -277,10 +323,11 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask Claude... (Shift+Enter for new line)"
+                    placeholder={(!hfTokenState || !hfTokenState.hasToken) ? "Configure token to start chatting..." : "Ask AI Assistant... (Shift+Enter for new line)"}
                     rows="3"
+                    disabled={isLoading || (!hfTokenState || !hfTokenState.hasToken)}
                 />
-                <button disabled={isLoading || !input.trim()} onClick={() => submitMessage(input)}>Send</button>
+                <button disabled={isLoading || !input.trim() || (!hfTokenState || !hfTokenState.hasToken)} onClick={() => submitMessage(input)}>Send</button>
             </div>
         </div>
     );

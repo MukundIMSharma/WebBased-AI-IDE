@@ -13,6 +13,7 @@ function App() {
   const [fileTree, setfileTree] = useState({});
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedFileContent, setSelectedFileContent] = useState("");
+  const [hfTokenState, setHfTokenState] = useState({ hasToken: true, token: "" });
 
   const [editorContext, setEditorContext] = useState({ selectedText: "", cursorLine: 1, openTabs: [] });
   const [aiPrefill, setAiPrefill] = useState("");
@@ -39,6 +40,28 @@ function App() {
     setfileTree({});
     setSelectedFile(null);
     setSelectedFileContent("");
+  };
+
+  const checkHfToken = async (authToken) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch('http://localhost:9000/api/user/hf-token', {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+      if (response.status === 401 || response.status === 403) {
+        handleLogout();
+        return;
+      }
+      const result = await response.json();
+      setHfTokenState({ hasToken: result.hasToken, token: result.hfToken || "" });
+      if (!result.hasToken) {
+        setSelectedFile('settings');
+      }
+    } catch (err) {
+      console.error("Failed to check HuggingFace token:", err);
+    }
   };
 
   const getFileTree = async () => {
@@ -87,6 +110,7 @@ function App() {
       Socket.connect();
 
       getFileTree();
+      checkHfToken(token);
 
       const refreshHandler = () => getFileTree();
       Socket.on('file:refresh', refreshHandler);
@@ -143,7 +167,7 @@ function App() {
 
   return (
     <div className='playground-container' style={{ gridTemplateColumns: `48px ${sidebarWidth}px 1fr` }}>
-      <ActivityBar activeSidebar={activeSidebar} setActiveSidebar={setActiveSidebar} />
+      <ActivityBar activeSidebar={activeSidebar} setActiveSidebar={setActiveSidebar} onConfigureToken={() => setSelectedFile('settings')} />
       <div className='sidebar'>
         <div className='sidebar-header' style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{activeSidebar === 'explorer' ? 'Explorer' : 'AI Chat'}</span>
@@ -172,6 +196,8 @@ function App() {
             editorContext={editorContext}
             aiPrefill={aiPrefill}
             setAiPrefill={setAiPrefill}
+            hfTokenState={hfTokenState}
+            onOpenTokenModal={() => setSelectedFile('settings')}
             onApplyToEditor={(startLine, endLine, blockContent) => {
               if (editorAccessRef.current) {
                 editorAccessRef.current.applyReplaceBlock(startLine, endLine, blockContent);
@@ -189,6 +215,13 @@ function App() {
             content={selectedFileContent}
             onContentChange={setSelectedFileContent}
             onContextChange={setEditorContext}
+            hfTokenState={hfTokenState}
+            onSaveSuccess={(newToken) => {
+              setHfTokenState({ hasToken: true, token: newToken });
+            }}
+            onCloseSettings={() => {
+              setSelectedFile(null);
+            }}
             onOpenAIChat={(prompt) => {
               setActiveSidebar('ai-chat');
               if (prompt) setAiPrefill(prompt);
