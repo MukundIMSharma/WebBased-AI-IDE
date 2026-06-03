@@ -7,7 +7,8 @@ import {
     createChat as dbCreateChat,
     deleteChat as dbDeleteChat,
     addMessage as dbAddMessage,
-    updateChatTitle as dbUpdateChatTitle
+    updateChatTitle as dbUpdateChatTitle,
+    getUserHfToken
 } from './db.js';
 import { authenticateToken } from './auth.js';
 
@@ -70,14 +71,19 @@ router.post("/chats/:id/message", authenticateToken, express.json(), async (req,
         const chat = await dbGetChat(req.user.id, id);
         if (!chat) return res.status(404).json({ error: "Chat not found" });
 
-        // Setup OpenAI client
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY || "", 
-        });
-
-        if (!process.env.OPENAI_API_KEY) {
-            return res.status(500).json({ error: "Missing OPENAI_API_KEY in server/.env" });
+        // Setup HuggingFace Inference client (OpenAI-compatible) using user-specific token
+        const userToken = await getUserHfToken(req.user.id);
+        if (!userToken) {
+            return res.status(400).json({ 
+                error: "Hugging Face token not configured. Please set your token in the settings modal.", 
+                isTokenError: true 
+            });
         }
+
+        const openai = new OpenAI({
+            apiKey: userToken,
+            baseURL: "https://router.huggingface.co/v1",
+        });
 
         // Generate message IDs and save User message to database
         const userMsgId = uuidv4();
@@ -122,8 +128,8 @@ router.post("/chats/:id/message", authenticateToken, express.json(), async (req,
 
         // Call OpenAI with stream
         const completion = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            max_tokens: 1500,
+            model: "Qwen/Qwen2.5-Coder-32B-Instruct",
+            max_tokens: 2048,
             stream: true,
             messages: [
                 { role: "system", content: systemPrompt },
@@ -150,12 +156,28 @@ router.post("/chats/:id/message", authenticateToken, express.json(), async (req,
 
     } catch (err) {
         console.error("AI Chat Error:", err);
-        // If headers are already sent, we write the error event inline to avoid breaking the stream
+        
+        let errorMessage = "Failed to process chat message.";
+        let isTokenError = false;
+
+        const status = err.status || (err.response && err.response.status);
+        const errMsg = err.message || "";
+        
+        if (status === 401 || status === 403 || errMsg.includes("permission") || errMsg.includes("Inference Providers") || errMsg.includes("authorization") || errMsg.includes("authentication")) {
+            errorMessage = `HuggingFace Token Error: ${errMsg || 'Access denied or missing Inference Providers permission.'}`;
+            isTokenError = true;
+        } else if (status === 400 && errMsg.includes("model_not_supported")) {
+            errorMessage = `HuggingFace Provider Error: ${errMsg || 'The requested model is not supported by your enabled inference providers.'}`;
+            isTokenError = true;
+        } else if (errMsg) {
+            errorMessage = errMsg;
+        }
+
         if (res.headersSent) {
-            res.write(JSON.stringify({ type: "error", message: "Failed to complete AI response." }) + "\n");
+            res.write(JSON.stringify({ type: "error", message: errorMessage, isTokenError }) + "\n");
             res.end();
         } else {
-            res.status(500).json({ error: "Failed to process chat message" });
+            res.status(status || 500).json({ error: errorMessage, isTokenError });
         }
     }
 });

@@ -20,37 +20,52 @@ export async function initDb() {
                 return reject(err);
             }
             console.log("Connected to SQLite database at:", DB_FILE);
-            
-            // Create tables
-            db.serialize(() => {
-                db.run(`PRAGMA foreign_keys = ON`);
-                
-                db.run(`
-                    CREATE TABLE IF NOT EXISTS users (
-                        id TEXT PRIMARY KEY,
-                        githubId TEXT UNIQUE,
-                        username TEXT NOT NULL,
-                        email TEXT UNIQUE NOT NULL,
-                        createdAt INTEGER NOT NULL
-                    )
-                `);
 
-                // Check if chats table exists and has userId column
-                db.all("PRAGMA table_info(chats)", (err, columns) => {
-                    if (err) {
-                        return reject(err);
+            // Helper to run a single statement as a promise
+            const run = (sql, params = []) =>
+                new Promise((res, rej) =>
+                    db.run(sql, params, (e) => (e ? rej(e) : res()))
+                );
+
+            const all = (sql, params = []) =>
+                new Promise((res, rej) =>
+                    db.all(sql, params, (e, rows) => (e ? rej(e) : res(rows)))
+                );
+
+            // All setup runs sequentially inside one serialize block
+            db.serialize(async () => {
+                try {
+                    await run(`PRAGMA foreign_keys = ON`);
+
+                    await run(`
+                        CREATE TABLE IF NOT EXISTS users (
+                            id TEXT PRIMARY KEY,
+                            githubId TEXT UNIQUE,
+                            username TEXT NOT NULL,
+                            email TEXT UNIQUE NOT NULL,
+                            createdAt INTEGER NOT NULL
+                        )
+                    `);
+
+                    try {
+                        await run(`ALTER TABLE users ADD COLUMN hfToken TEXT`);
+                        console.log("Added hfToken column to users table.");
+                    } catch (e) {
+                        // ignore error if column already exists (e.g., duplicate column error)
                     }
-                    
+
+                    // Check if chats table exists and has a userId column
+                    const columns = await all(`PRAGMA table_info(chats)`);
                     const hasUserId = columns && columns.some(col => col.name === 'userId');
-                    
-                    // If chats table exists but doesn't have a userId column, drop tables to recreate them
+
+                    // Drop old incompatible schema and recreate
                     if (columns && columns.length > 0 && !hasUserId) {
                         console.log("Upgrading chats database schema (dropping old incompatible tables)...");
-                        db.run("DROP TABLE IF EXISTS messages");
-                        db.run("DROP TABLE IF EXISTS chats");
+                        await run(`DROP TABLE IF EXISTS messages`);
+                        await run(`DROP TABLE IF EXISTS chats`);
                     }
-                    
-                    db.run(`
+
+                    await run(`
                         CREATE TABLE IF NOT EXISTS chats (
                             id TEXT PRIMARY KEY,
                             userId TEXT NOT NULL,
@@ -61,26 +76,25 @@ export async function initDb() {
                         )
                     `);
 
-                    db.run(`
+                    await run(`
                         CREATE TABLE IF NOT EXISTS messages (
                             id TEXT PRIMARY KEY,
                             chatId TEXT NOT NULL,
                             role TEXT NOT NULL,
                             content TEXT NOT NULL,
-                            toolCalls TEXT, -- Serialized JSON array of tool status objects
+                            toolCalls TEXT,
                             createdAt INTEGER NOT NULL,
                             FOREIGN KEY (chatId) REFERENCES chats (id) ON DELETE CASCADE
                         )
                     `);
 
-                    db.run(`CREATE INDEX IF NOT EXISTS idx_chats_userId ON chats(userId)`);
-                    db.run(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId)`, (err) => {
-                        if (err) {
-                            return reject(err);
-                        }
-                        resolve();
-                    });
-                });
+                    await run(`CREATE INDEX IF NOT EXISTS idx_chats_userId ON chats(userId)`);
+                    await run(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId)`);
+
+                    resolve();
+                } catch (e) {
+                    reject(e);
+                }
             });
         });
     });
@@ -120,11 +134,11 @@ export async function findOrCreateUserByGitHub(profile) {
     const username = profile.login || profile.username || 'github_user';
     const email = profile.email || `${username}@github.com`;
     
-    const existingUser = await getRow(`SELECT id, githubId, username, email FROM users WHERE githubId = ?`, [githubId]);
+    const existingUser = await getRow(`SELECT id, githubId, username, email, hfToken FROM users WHERE githubId = ?`, [githubId]);
     if (existingUser) return existingUser;
     
     // Check if user with same email exists
-    const existingEmailUser = await getRow(`SELECT id, githubId, username, email FROM users WHERE email = ?`, [email]);
+    const existingEmailUser = await getRow(`SELECT id, githubId, username, email, hfToken FROM users WHERE email = ?`, [email]);
     if (existingEmailUser) {
         // Link githubId to this email
         await runQuery(`UPDATE users SET githubId = ? WHERE email = ?`, [githubId, email]);
@@ -189,4 +203,14 @@ export async function addMessage(id, chatId, role, content, toolCalls = null) {
     // Update parent chat timestamp
     await runQuery(`UPDATE chats SET updatedAt = ? WHERE id = ?`, [now, chatId]);
     return { id, chatId, role, content, toolCalls, createdAt: now };
+}
+
+// User HuggingFace Token Management Helpers
+export async function getUserHfToken(userId) {
+    const row = await getRow(`SELECT hfToken FROM users WHERE id = ?`, [userId]);
+    return row ? row.hfToken : null;
+}
+
+export async function updateUserHfToken(userId, hfToken) {
+    await runQuery(`UPDATE users SET hfToken = ? WHERE id = ?`, [hfToken, userId]);
 }

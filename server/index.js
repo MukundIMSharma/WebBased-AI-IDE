@@ -15,7 +15,7 @@ import { setupLsp } from './lsp.js';
 import "dotenv/config";
 import aiRouter from './ai.js';
 import { ensureContainer, containerExec } from './containerManager.js';
-import { initDb, findOrCreateUserByGitHub } from './db.js';
+import { initDb, findOrCreateUserByGitHub, getUserHfToken, updateUserHfToken } from './db.js';
 import { generateToken, authenticateToken, authenticateSocketToken } from './auth.js';
 
 await initDb();
@@ -186,6 +186,46 @@ io.on("connection", async (socket) => {
 });
 
 
+
+app.get("/api/user/hf-token", authenticateToken, async (req, res) => {
+    try {
+        const token = await getUserHfToken(req.user.id);
+        res.json({ hasToken: !!token, hfToken: token || "" });
+    } catch (err) {
+        console.error("Failed to get HF token:", err);
+        res.status(500).json({ error: "Failed to query Hugging Face token." });
+    }
+});
+
+app.post("/api/user/hf-token", authenticateToken, express.json(), async (req, res) => {
+    const { hfToken } = req.body;
+    if (hfToken === undefined) {
+        return res.status(400).json({ error: "hfToken field is required." });
+    }
+
+    try {
+        if (hfToken) {
+            // Validate the token against HuggingFace WHOAMI endpoint
+            const hfRes = await fetch("https://huggingface.co/api/whoami-v2", {
+                headers: {
+                    "Authorization": `Bearer ${hfToken}`
+                }
+            });
+
+            if (!hfRes.ok) {
+                const errBody = await hfRes.json().catch(() => ({}));
+                const errMessage = errBody.error || "Authentication failed. Check your token.";
+                return res.status(400).json({ error: `HuggingFace API: ${errMessage}` });
+            }
+        }
+
+        await updateUserHfToken(req.user.id, hfToken);
+        res.json({ success: true, hasToken: !!hfToken });
+    } catch (err) {
+        console.error("Failed to validate or save HF token:", err);
+        res.status(500).json({ error: "Server error during token validation." });
+    }
+});
 
 app.get("/files", authenticateToken, async (req, res) => {
     try {

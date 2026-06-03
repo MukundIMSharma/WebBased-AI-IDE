@@ -6,3 +6,6 @@ dist-ssr/
 .idea/
 .DS_Store
 *.log
+server/data/
+*.db
+
