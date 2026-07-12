@@ -7,6 +7,7 @@ import Editor from './component/Editor';
 import Socket from './socket.js';
 import AIChat from './component/AIChat';
 import Login from './component/Login';
+import { API_BASE_URL } from './config';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
@@ -45,7 +46,7 @@ function App() {
   const checkHfToken = async (authToken) => {
     if (!authToken) return;
     try {
-      const response = await fetch('http://localhost:9000/api/user/hf-token', {
+      const response = await fetch(`${API_BASE_URL}/api/user/hf-token`, {
         headers: {
           'Authorization': `Bearer ${authToken}`
         }
@@ -67,7 +68,7 @@ function App() {
   const getFileTree = async () => {
     if (!token) return;
     try {
-      const response = await fetch('http://localhost:9000/files', {
+      const response = await fetch(`${API_BASE_URL}/files`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -86,7 +87,7 @@ function App() {
   const getFileContent = async (path) => {
     if (!token) return;
     try {
-      const response = await fetch(`http://localhost:9000/files/content?path=${encodeURIComponent(path)}`, {
+      const response = await fetch(`${API_BASE_URL}/files/content?path=${encodeURIComponent(path)}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }

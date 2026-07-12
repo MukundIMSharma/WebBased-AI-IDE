@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './AIChat.css';
+import { API_BASE_URL } from '../config';
 
 const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, setAiPrefill, hfTokenState, onOpenTokenModal, onApplyToEditor }) => {
     const [chats, setChats] = useState([]);
@@ -18,7 +19,7 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
     const fetchChats = async () => {
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch('http://localhost:9000/ai/chats', {
+            const res = await fetch(`${API_BASE_URL}/ai/chats`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
@@ -45,7 +46,7 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
     const loadChat = async (id) => {
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch(`http://localhost:9000/ai/chats/${id}`, {
+            const res = await fetch(`${API_BASE_URL}/ai/chats/${id}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
@@ -60,7 +61,7 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
     const createNewChat = async () => {
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch('http://localhost:9000/ai/chats', { 
+            const res = await fetch(`${API_BASE_URL}/ai/chats`, { 
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -78,7 +79,7 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
         e.stopPropagation();
         try {
             const token = localStorage.getItem('token');
-            await fetch(`http://localhost:9000/ai/chats/${id}`, { 
+            await fetch(`${API_BASE_URL}/ai/chats/${id}`, { 
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -109,7 +110,7 @@ const AIChat = ({ selectedFile, selectedFileContent, editorContext, aiPrefill, s
 
         try {
             const token = localStorage.getItem('token');
-            const res = await fetch(`http://localhost:9000/ai/chats/${activeChatId}/message`, {
+            const res = await fetch(`${API_BASE_URL}/ai/chats/${activeChatId}/message`, {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',

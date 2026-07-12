@@ -1,10 +1,11 @@
 import React from 'react';
 import './Login.css';
+import { API_BASE_URL } from '../config';
 
 const Login = () => {
     const handleGitHubLogin = () => {
         // Redirect browser to the backend OAuth initialization route
-        window.location.href = 'http://localhost:9000/api/auth/github';
+        window.location.href = `${API_BASE_URL}/api/auth/github`;
     };
 
     return (

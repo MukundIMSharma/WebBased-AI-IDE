@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react
 import * as monaco from 'monaco-editor';
 import { createLanguageClient } from '../lsp-client';
 import TokenVerificationPanel from './TokenVerificationPanel';
+import { API_BASE_URL, WS_BASE_URL } from '../config';
 
 const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAIChat, onContextChange, hfTokenState, onSaveSuccess, onCloseSettings }, ref) => {
     const editorRef = useRef(null);
@@ -114,7 +115,7 @@ const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAICha
                 const currentContent = monacoInstance.current.getValue();
                 try {
                     const token = localStorage.getItem('token');
-                    const response = await fetch('http://localhost:9000/files/content', {
+                    const response = await fetch(`${API_BASE_URL}/files/content`, {
                         method: 'POST',
                         headers: { 
                             'Content-Type': 'application/json',
@@ -174,7 +175,7 @@ const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAICha
                 }
                 
                 if (!languageClientRef.current) {
-                    createLanguageClient(language, 'ws://localhost:9000/lsp')
+                    createLanguageClient(language, `${WS_BASE_URL}/lsp`)
                         .then(client => {
                             client.language = language;
                             languageClientRef.current = client;
@@ -204,7 +205,7 @@ const Editor = forwardRef(({ selectedFile, content, onContentChange, onOpenAICha
                 const currentContent = monacoInstance.current.getValue();
                 try {
                     const token = localStorage.getItem('token');
-                    const response = await fetch('http://localhost:9000/files/content', {
+                    const response = await fetch(`${API_BASE_URL}/files/content`, {
                         method: 'POST',
                         headers: { 
                             'Content-Type': 'application/json',

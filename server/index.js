@@ -34,7 +34,8 @@ app.use(cors());
 // Mount OAuth Routes
 app.get("/api/auth/github", (req, res) => {
     const clientId = process.env.GITHUB_CLIENT_ID;
-    const redirectUri = "http://localhost:9000/api/auth/github/callback";
+    const backendUrl = process.env.BACKEND_URL || "http://localhost:9000";
+    const redirectUri = `${backendUrl}/api/auth/github/callback`;
     const scope = "user:email";
     
     if (!clientId) {

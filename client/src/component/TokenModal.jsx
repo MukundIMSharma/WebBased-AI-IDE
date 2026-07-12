@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './TokenModal.css';
+import { API_BASE_URL } from '../config';
 
 const TokenModal = ({ isOpen, onClose, onSaveSuccess }) => {
     const [tokenInput, setTokenInput] = useState('');
@@ -22,7 +23,7 @@ const TokenModal = ({ isOpen, onClose, onSaveSuccess }) => {
 
         try {
             const authToken = localStorage.getItem('token');
-            const response = await fetch('http://localhost:9000/api/user/hf-token', {
+            const response = await fetch(`${API_BASE_URL}/api/user/hf-token`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
